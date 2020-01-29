@@ -1,0 +1,13 @@
+language: go
+
+go:
+  - '1.13.x'
+
+services:
+  - docker
+
+jobs:
+  include:
+    - stage: Integration Tests
+      before_install: docker run -it --rm -p 2379:2379 --network app-tier --env ALLOW_NONE_AUTHENTICATION=yes bitnami/etcd:latest        
+      script: go test -v -count=1 instPackage/inst -run TestAll

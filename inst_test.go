@@ -609,7 +609,6 @@ func TestAll(t *testing.T) {
 			if m[*v] != uint32(i+1) {
 				t.Error()
 			}
-
 		}
 	}
 }
