@@ -186,8 +186,6 @@ func (s *NameSpaceMaps) addKey(key *string) (uint32, error) {
 		modRevision := s.counter.rev
 		s.counter.Unlock()
 
-		log.Println("ccc", atomic.AddInt32(&ccc, 1))
-
 		clientCtx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
 		txnResp, err := s.etcdClient.Txn(clientCtx).
 			If(clientv3.Compare(clientv3.CreateRevision(KeyWithPrefix), "=", 0),
