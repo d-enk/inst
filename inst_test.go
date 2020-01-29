@@ -77,12 +77,10 @@ func Test2(t *testing.T) {
 
 	New(cl, testPrefix, "002")
 	New(cl, testPrefix, "003")
-	// time.Sleep(10 * time.Millisecond)
 
 	if count(cl, "") != 9 { // NS counter, 4 NameSpaces and 4 keys counter
 		t.Error()
 	}
-	time.Sleep(2000)
 }
 
 func Test3(t *testing.T) {
@@ -101,8 +99,8 @@ func Test3(t *testing.T) {
 	}
 
 	wg.Add(2)
-	f(0, 50)
-	f(10, 100)
+	go f(0, 50)
+	go f(10, 100)
 
 	// time.Sleep(100)
 	wg.Wait()
@@ -111,7 +109,6 @@ func Test3(t *testing.T) {
 		log.Println(c)
 		t.Error()
 	}
-	time.Sleep(2000)
 }
 
 func Test4(t *testing.T) {
@@ -382,8 +379,8 @@ func TestAll(t *testing.T) {
 		}
 
 		wg.Add(2)
-		f(0, 50)
-		f(10, 100)
+		go f(0, 50)
+		go f(10, 100)
 
 		// time.Sleep(100)
 		wg.Wait()

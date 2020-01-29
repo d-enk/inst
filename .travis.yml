@@ -13,4 +13,4 @@ jobs:
       before_install: 
         - docker network create app-tier --driver bridge
         - docker run -d --rm -p 2379:2379 --network app-tier --env ALLOW_NONE_AUTHENTICATION=yes bitnami/etcd:latest
-      script: go test -v -count=1 -cover . -run Test
+      script: go test -v -count=1 -cover . -run TestAll
