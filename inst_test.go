@@ -2,6 +2,7 @@ package inst
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strconv"
 	"sync"
@@ -31,7 +32,10 @@ func newConnect() *clientv3.Client {
 
 func erase(cl *clientv3.Client) {
 	clientCtx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
-	cl.Delete(clientCtx, testPrefix, clientv3.WithPrefix())
+	_, err := cl.Delete(clientCtx, testPrefix, clientv3.WithPrefix())
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 	cancel()
 }
 
@@ -49,29 +53,75 @@ func get(cl *clientv3.Client, key string) *clientv3.GetResponse {
 	return p
 }
 
-func Test1(t *testing.T) {
-	// t.Error()
-	cl := newConnect()
-	defer cl.Close()
-	erase(cl)
-	//defer erase(cl)
-	New(cl, testPrefix, "000")
+func checkMaps(ns *NameSpaceMaps, l int) error {
 
-	if count(cl, "") != 3 { //NS counter, NameSpace and keys counter
-		t.Error()
+	m := ns.maps.Load().(maps).strToID
+	k := ns.maps.Load().(maps).idToStr
+
+	// total number of keys in local structs
+	if len(m) != l || len(k) != l+1 {
+		log.Println(len(m), len(k))
+		return errors.New("not correct lens")
 	}
+
+	// check that key -> id correct
+	for key, id := range m {
+		log.Println(key, id)
+
+		checkID, err1 := ns.Key(key)
+		if err1 != nil {
+			return err1
+		}
+
+		if checkID != id {
+			return errors.New("not correct id from Key func")
+		}
+
+		if *k[id] != key {
+			return errors.New("not correct id by key")
+		}
+	}
+
+	// check that id -> key correct
+	for id, key := range k[1:] {
+		if key == nil {
+			return errors.New("no key by id")
+		}
+
+		checkKey, err2 := ns.ID(uint32(id + 1))
+		if err2 != nil {
+			return err2
+		}
+
+		if *checkKey != *key {
+			return errors.New("not correct key from ID func")
+		}
+
+		if m[*key] != uint32(id+1) {
+			return errors.New("not correct key by id")
+		}
+
+	}
+	return nil
 }
 
-func Test2(t *testing.T) {
+func TestNew(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
 	erase(cl)
 	//	defer erase(cl)
 
+	// create new namespace 000
 	New(cl, testPrefix, "000")
+
+	if count(cl, "") != 3 { //NS counter, NameSpace and keys counter
+		t.Error()
+	}
+
+	New(cl, testPrefix, "000") // local init (not create new records in etcd)
 	New(cl, testPrefix, "001")
 
-	if count(cl, "") != 5 { // NS counter, 2 NameSpaces and 2 keys counters
+	if count(cl, "") != 5 { // NS counter, 2 NameSpaces(000,001) and 2 keys counters
 		t.Error()
 	}
 
@@ -81,108 +131,161 @@ func Test2(t *testing.T) {
 	if count(cl, "") != 9 { // NS counter, 4 NameSpaces and 4 keys counter
 		t.Error()
 	}
+
 }
 
-func Test3(t *testing.T) {
+// thread-safety check for creating new namespaces
+func TestSTnew(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
 	erase(cl)
 
 	//defer erase(cl)
 
+	log.Println("test 2 before")
+
 	var wg sync.WaitGroup
 	f := func(b, e int) {
 		defer wg.Done()
 		for i := b; i < e; i++ {
 			New(cl, testPrefix, strconv.Itoa(i))
+			// log.Println("in")
 		}
 	}
 
 	wg.Add(2)
-	go f(0, 50)
-	go f(10, 100)
+	go f(0, 25)
+	go f(10, 50)
 
-	// time.Sleep(100)
 	wg.Wait()
+	log.Println("test 2 after")
 
-	if c := count(cl, ""); c != 201 { // 1 NS counter, 1000 NameSpace and 1000 keys counter
+	if c := count(cl, ""); c != 101 { // 1 NS counter, 100 NameSpace and 100 keys counter
 		log.Println(c)
 		t.Error()
 	}
 }
 
-func Test4(t *testing.T) {
+// cheking corectly key & id work
+func Test3(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
-	erase(cl)
+	defer erase(cl)
 
 	// defer erase(cl)
+	log.Println("test 3 before")
 
 	s := New(cl, testPrefix, "0001")
-	s.Choose("0001").Key("1")
+	log.Println("test 3 after New")
 
-	if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)); c != 2 { // 1 key and IDs counter
+	ns := s.Choose("0001")
+
+	ns.Key("1") // write new keys
+	ns.Key("3")
+	ns.Key("5")
+
+	// cheking key in etcd
+	if c := count(cl, uint32ToString(ns.nameSpaceID)); c != 4 { // 3 key and IDs counter
 		t.Error()
 	}
 
-	if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1 { // 1 key
+	if c := count(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)); c != 3 { // 1 key
 		t.Error()
 	}
 
-	if p := get(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)+"1"); string(p.Kvs[0].Value) != uint32ToString(1) {
+	if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"1"); string(p.Kvs[0].Value) != uint32ToString(1) {
 		t.Error()
 	}
 
+	if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"3"); string(p.Kvs[0].Value) != uint32ToString(2) {
+		t.Error()
+	}
+
+	if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"5"); string(p.Kvs[0].Value) != uint32ToString(3) {
+		t.Error()
+	}
+
+	if err := checkMaps(ns, 3); err != nil {
+		t.Error(err)
+	}
+
+	log.Println("test 3 after")
 }
 
-func Test5(t *testing.T) {
+// checking that init correctly
+func TestInit(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
-	erase(cl)
+	defer erase(cl)
 
-	// defer erase(cl)
+	s1 := New(cl, testPrefix, "0001")
 
-	var wg sync.WaitGroup
-	s := New(cl, testPrefix, "0001")
+	f := func(s *Inst, b, e int) {
+		for i := b; i < e; i++ {
+			log.Println(i)
+			s.Choose("0001").Key(strconv.Itoa(i))
+		}
+	}
 
-	f := func(b, e int) {
+	log.Println("first write")
+	f(s1, 1000, 1010)
+	// checking localWrite
+	if err := checkMaps(s1.Choose("0001"), 10); err != nil {
+		t.Error(err)
+	}
+
+	// standart init
+	s2 := New(cl, testPrefix, "0001") // should load keys from etcd
+	if err := checkMaps(s2.Choose("0001"), 10); err != nil {
+		t.Error(err)
+	}
+}
+
+// checking that watcher work correctly
+func TestWatcher(t *testing.T) {
+	cl := newConnect()
+	defer cl.Close()
+	defer erase(cl)
+
+	s1 := New(cl, testPrefix, "0001")
+
+	f := func(s *Inst, b, e int) {
 		for i := b; i < e; i++ {
 			s.Choose("0001").Key(strconv.Itoa(i))
 		}
-		wg.Done()
-	}
-	wg.Add(2)
-	go f(0, 1000)
-	go f(500, 1500)
-
-	wg.Wait()
-
-	if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter,1 NameSpace and NS counter
-		log.Println(c)
-		t.Error()
 	}
 
-	if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
-		t.Error()
+	// s1 should get new recoreds from s2
+	log.Println("watcher")
+	s2 := New(cl, testPrefix, "0001")
+	f(s2, 1010, 1020) // s2 write new records at same namespace as s1
+
+	time.Sleep(100 * time.Millisecond) // wait while s1 watcher work
+
+	if err := checkMaps(s1.Choose("0001"), 10); err != nil {
+		t.Error(err)
 	}
 
 }
 
-func Test6(t *testing.T) {
+// checking thread-safety watcher work
+func TestTSwatcher(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
-	erase(cl)
+	defer erase(cl)
 
 	// defer erase(cl)
+	log.Println("test 6 start")
 
 	var wg sync.WaitGroup
 	s1 := New(cl, testPrefix, "0001")
-	s2 := New(cl, testPrefix, "0002")
+	s2 := New(cl, testPrefix, "0001")
 
 	f := func(b, e int) {
 		for i := b; i < e; i++ {
 			s1.Choose("0001").Key(strconv.Itoa(i))
-			s2.Choose("0002").Key(strconv.Itoa(i))
+			s2.Choose("0001").Key(strconv.Itoa(i))
+			// log.Println("test 5 in")
 		}
 		wg.Done()
 	}
@@ -191,8 +294,12 @@ func Test6(t *testing.T) {
 	go f(500, 1500)
 
 	wg.Wait()
+	time.Sleep(1000 * time.Millisecond) //wait wathers
 
-	if c := count(cl, ""); c != 3005 { // 2x1500 keys and 2 ID counter, 2 NameSpace and NS counter
+	log.Println("test 6 end")
+
+	if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter, 1 NameSpace and NS counter
+		log.Println(c)
 		t.Error()
 	}
 
@@ -200,80 +307,24 @@ func Test6(t *testing.T) {
 		t.Error()
 	}
 
-	if c := count(cl, uint32ToString(s2.Choose("0002").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
+	if c := count(cl, uint32ToString(s2.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
 		t.Error()
+	}
+
+	if err := checkMaps(s1.Choose("0001"), 1500); err != nil {
+		t.Error(err)
+	}
+
+	if err := checkMaps(s2.Choose("0001"), 1500); err != nil {
+		t.Error(err)
 	}
 }
 
-func Test7(t *testing.T) {
+// stress test thread-safety key records
+func TestTSkey(t *testing.T) {
 	cl := newConnect()
 	defer cl.Close()
-	erase(cl)
-
-	// defer erase(cl)
-
-	s1 := New(cl, testPrefix, "0001")
-
-	f := func(s *Inst, b, e int) {
-		for i := b; i < e; i++ {
-			s.Choose("0001").Key(strconv.Itoa(i))
-		}
-	}
-
-	f(s1, 1000, 1010)
-	// localWrite
-	m := s1.Choose("0001").Load().(maps).strToID
-	k := s1.Choose("0001").Load().(maps).idToStr
-
-	if m["1000"] != 1 || *k[1] != "1000" {
-		t.Error()
-	}
-	if m["1002"] != 3 || *k[3] != "1002" {
-		t.Error()
-	}
-
-	// standart init
-	s1 = New(cl, testPrefix, "0001")
-	m = s1.Choose("0001").Load().(maps).strToID
-	k = s1.Choose("0001").Load().(maps).idToStr
-
-	if m["1000"] != 1 || *k[1] != "1000" {
-		t.Error()
-	}
-	if m["1002"] != 3 || *k[3] != "1002" {
-		t.Error()
-	}
-	if m["1006"] != 7 || *k[7] != "1006" {
-		t.Error()
-	}
-	if m["1009"] != 10 || *k[10] != "1009" {
-		t.Error()
-	}
-
-	// watcher check
-	s2 := New(cl, testPrefix, "0001")
-	f(s2, 1010, 1020)
-	time.Sleep(10 * time.Millisecond)
-	m = s1.Choose("0001").Load().(maps).strToID
-	k = s1.Choose("0001").Load().(maps).idToStr
-
-	id, _ := s1.Choose("0001").Key("1010")
-	st, _ := s1.Choose("0001").ID(11)
-	if m["1010"] != 11 || *k[11] != "1010" || id != 11 || *st != "1010" {
-		t.Error()
-	}
-
-	if m["1015"] != 16 || *k[16] != "1015" {
-		t.Error()
-	}
-}
-
-func Test8(t *testing.T) {
-	cl := newConnect()
-	defer cl.Close()
-	erase(cl)
-
-	// defer erase(cl)
+	defer erase(cl)
 
 	var wg sync.WaitGroup
 	s1 := New(cl, testPrefix, "0001")
@@ -285,327 +336,277 @@ func Test8(t *testing.T) {
 		wg.Done()
 	}
 
-	wg.Add(9)
+	wg.Add(7)
 	go f(s1, 1000, 2500)
 	go f(s1, 1000, 2500)
 	go f(s1, 3000, 4500)
 	go f(s1, 2000, 3500)
-	go f(s1, 2000, 5500)
-	go f(s1, 2000, 5500)
+	go f(s1, 4000, 5500)
 	go f(s1, 0, 1000)
-	go f(s1, 5000, 10000)
 	go f(s1, 3000, 4500)
 
 	wg.Wait()
-	// localWrite
-	m := s1.Choose("0001").Load().(maps).strToID
-	k := s1.Choose("0001").Load().(maps).idToStr
 
-	if len(m) != 10000 || len(k) != 10001 {
-		log.Println(len(m), len(k))
+	// total number of keys in etcd
+	if count(cl, uint32ToString(s1.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)) != 5500 {
 		t.Error()
 	}
 
-	for i, v := range m {
-		if *k[v] != i {
-			t.Error()
-		}
-	}
-
-	for i, v := range k[1:] {
-		if v == nil {
-			t.Error()
-		}
-
-		if m[*v] != uint32(i+1) {
-			t.Error()
-		}
-
+	if err := checkMaps(s1.Choose("0001"), 5500); err != nil {
+		t.Error(err)
 	}
 }
 
 func TestAll(t *testing.T) {
 	{
-		// Test 1
-		cl := newConnect()
-		defer cl.Close()
-		erase(cl)
-		//defer erase(cl)
-		New(cl, testPrefix, "000")
-
-		if count(cl, "") != 3 { //NS counter, NameSpace and keys counter
-			t.Error()
-		}
-	}
-
-	{
-		// Test 2
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
 		//	defer erase(cl)
-
+	
+		// create new namespace 000
 		New(cl, testPrefix, "000")
-		New(cl, testPrefix, "001")
-
-		if count(cl, "") != 5 { // NS counter, 2 NameSpaces and 2 keys counters
+	
+		if count(cl, "") != 3 { //NS counter, NameSpace and keys counter
 			t.Error()
 		}
-
+	
+		New(cl, testPrefix, "000") // local init (not create new records in etcd)
+		New(cl, testPrefix, "001")
+	
+		if count(cl, "") != 5 { // NS counter, 2 NameSpaces(000,001) and 2 keys counters
+			t.Error()
+		}
+	
 		New(cl, testPrefix, "002")
 		New(cl, testPrefix, "003")
-		// time.Sleep(10 * time.Millisecond)
-
+	
 		if count(cl, "") != 9 { // NS counter, 4 NameSpaces and 4 keys counter
 			t.Error()
 		}
-		time.Sleep(2000)
+	
 	}
-
+	
+	// thread-safety check for creating new namespaces
 	{
-		// Test 3
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
-
+	
 		//defer erase(cl)
-
+	
+		log.Println("test 2 before")
+	
 		var wg sync.WaitGroup
 		f := func(b, e int) {
 			defer wg.Done()
 			for i := b; i < e; i++ {
 				New(cl, testPrefix, strconv.Itoa(i))
+				// log.Println("in")
 			}
 		}
-
+	
 		wg.Add(2)
-		go f(0, 50)
-		go f(10, 100)
-
-		// time.Sleep(100)
+		go f(0, 25)
+		go f(10, 50)
+	
 		wg.Wait()
-
-		if c := count(cl, ""); c != 201 { // 1 NS counter, 1000 NameSpace and 1000 keys counter
+		log.Println("test 2 after")
+	
+		if c := count(cl, ""); c != 101 { // 1 NS counter, 100 NameSpace and 100 keys counter
 			log.Println(c)
 			t.Error()
 		}
-		time.Sleep(2000)
 	}
-
+	
+	// cheking corectly key & id work
 	{
-		// Test 4
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
-
-		defer erase(cl)
-
-		s := New(cl, testPrefix, "0001")
-		s.Choose("0001").Key("1")
-
-		if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)); c != 2 { // 1 key and IDs counter
-			t.Error()
-		}
-
-		if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1 { // 1 key
-			t.Error()
-		}
-
-		if p := get(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)+"1"); string(p.Kvs[0].Value) != uint32ToString(1) {
-			t.Error()
-		}
-
-	}
-
-	{
-		// Test 5
-		cl := newConnect()
-		defer cl.Close()
-		erase(cl)
-
+	
 		// defer erase(cl)
-
-		var wg sync.WaitGroup
+		log.Println("test 3 before")
+	
 		s := New(cl, testPrefix, "0001")
-
-		f := func(b, e int) {
+		log.Println("test 3 after New")
+	
+		ns := s.Choose("0001")
+	
+		ns.Key("1") // write new keys
+		ns.Key("3")
+		ns.Key("5")
+	
+		// cheking key in etcd
+		if c := count(cl, uint32ToString(ns.nameSpaceID)); c != 4 { // 3 key and IDs counter
+			t.Error()
+		}
+	
+		if c := count(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)); c != 3 { // 1 key
+			t.Error()
+		}
+	
+		if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"1"); string(p.Kvs[0].Value) != uint32ToString(1) {
+			t.Error()
+		}
+	
+		if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"3"); string(p.Kvs[0].Value) != uint32ToString(2) {
+			t.Error()
+		}
+	
+		if p := get(cl, uint32ToString(ns.nameSpaceID)+uint32ToString(typeKEY)+"5"); string(p.Kvs[0].Value) != uint32ToString(3) {
+			t.Error()
+		}
+	
+		if err := checkMaps(ns, 3); err != nil {
+			t.Error(err)
+		}
+	
+		log.Println("test 3 after")
+	}
+	
+	// checking that init correctly
+	{
+		cl := newConnect()
+		defer cl.Close()
+		erase(cl)
+	
+		s1 := New(cl, testPrefix, "0001")
+	
+		f := func(s *Inst, b, e int) {
+			for i := b; i < e; i++ {
+				log.Println(i)
+				s.Choose("0001").Key(strconv.Itoa(i))
+			}
+		}
+	
+		log.Println("first write")
+		f(s1, 1000, 1010)
+		// checking localWrite
+		if err := checkMaps(s1.Choose("0001"), 10); err != nil {
+			t.Error(err)
+		}
+	
+		// standart init
+		s2 := New(cl, testPrefix, "0001") // should load keys from etcd
+		if err := checkMaps(s2.Choose("0001"), 10); err != nil {
+			t.Error(err)
+		}
+	}
+	
+	// checking that watcher work correctly
+	{
+		cl := newConnect()
+		defer cl.Close()
+		erase(cl)
+	
+		s1 := New(cl, testPrefix, "0001")
+	
+		f := func(s *Inst, b, e int) {
 			for i := b; i < e; i++ {
 				s.Choose("0001").Key(strconv.Itoa(i))
+			}
+		}
+	
+		// s1 should get new recoreds from s2
+		log.Println("watcher")
+		s2 := New(cl, testPrefix, "0001")
+		f(s2, 1010, 1020) // s2 write new records at same namespace as s1
+	
+		time.Sleep(100 * time.Millisecond) // wait while s1 watcher work
+	
+		if err := checkMaps(s1.Choose("0001"), 10); err != nil {
+			t.Error(err)
+		}
+	
+	}
+	
+	// checking thread-safety watcher work
+	{
+		cl := newConnect()
+		defer cl.Close()
+		erase(cl)
+	
+		// defer erase(cl)
+		log.Println("test 6 start")
+	
+		var wg sync.WaitGroup
+		s1 := New(cl, testPrefix, "0001")
+		s2 := New(cl, testPrefix, "0001")
+	
+		f := func(b, e int) {
+			for i := b; i < e; i++ {
+				s1.Choose("0001").Key(strconv.Itoa(i))
+				s2.Choose("0001").Key(strconv.Itoa(i))
+				// log.Println("test 5 in")
 			}
 			wg.Done()
 		}
 		wg.Add(2)
 		go f(0, 1000)
 		go f(500, 1500)
-
+	
 		wg.Wait()
-
-		if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter,1 NameSpace and NS counter
+		time.Sleep(1000 * time.Millisecond) //wait wathers
+	
+		log.Println("test 6 end")
+	
+		if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter, 1 NameSpace and NS counter
 			log.Println(c)
 			t.Error()
 		}
-
-		if c := count(cl, uint32ToString(s.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
-			t.Error()
-		}
-
-	}
-
-	{
-		// Test 6
-		cl := newConnect()
-		defer cl.Close()
-		erase(cl)
-
-		// defer erase(cl)
-
-		var wg sync.WaitGroup
-		s1 := New(cl, testPrefix, "0001")
-		s2 := New(cl, testPrefix, "0002")
-
-		f := func(b, e int) {
-			defer wg.Done()
-			for i := b; i < e; i++ {
-				s1.Choose("0001").Key(strconv.Itoa(i))
-				s2.Choose("0002").Key(strconv.Itoa(i))
-			}
-		}
-		wg.Add(2)
-		go f(0, 1000)
-		go f(500, 1500)
-
-		wg.Wait()
-
-		if c := count(cl, ""); c != 3005 { // 2x1500 keys and 2 ID counter, 2 NameSpace and NS counter
-			t.Error()
-		}
-
+	
 		if c := count(cl, uint32ToString(s1.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
 			t.Error()
 		}
-
-		if c := count(cl, uint32ToString(s2.Choose("0002").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
+	
+		if c := count(cl, uint32ToString(s2.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)); c != 1500 { // 1500 keys
 			t.Error()
 		}
+	
+		if err := checkMaps(s1.Choose("0001"), 1500); err != nil {
+			t.Error(err)
+		}
+	
+		if err := checkMaps(s2.Choose("0001"), 1500); err != nil {
+			t.Error(err)
+		}
 	}
-
+	
+	// stress test thread-safety key records
 	{
-		// Test 7
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
-
-		// defer erase(cl)
-
-		s1 := New(cl, testPrefix, "0001")
-
-		f := func(s *Inst, b, e int) {
-			for i := b; i < e; i++ {
-				s.Choose("0001").Key(strconv.Itoa(i))
-			}
-		}
-
-		f(s1, 1000, 1010)
-		// localWrite
-		m := s1.Choose("0001").Load().(maps).strToID
-		k := s1.Choose("0001").Load().(maps).idToStr
-
-		if m["1000"] != 1 || *k[1] != "1000" {
-			t.Error()
-		}
-		if m["1002"] != 3 || *k[3] != "1002" {
-			t.Error()
-		}
-
-		// standart init
-		s1 = New(cl, testPrefix, "0001")
-		m = s1.Choose("0001").Load().(maps).strToID
-		k = s1.Choose("0001").Load().(maps).idToStr
-
-		if m["1000"] != 1 || *k[1] != "1000" {
-			t.Error()
-		}
-		if m["1002"] != 3 || *k[3] != "1002" {
-			t.Error()
-		}
-		if m["1006"] != 7 || *k[7] != "1006" {
-			t.Error()
-		}
-		if m["1009"] != 10 || *k[10] != "1009" {
-			t.Error()
-		}
-
-		// watcher check
-		s2 := New(cl, testPrefix, "0001")
-		f(s2, 1010, 1020)
-		time.Sleep(10 * time.Millisecond)
-		m = s1.Choose("0001").Load().(maps).strToID
-		k = s1.Choose("0001").Load().(maps).idToStr
-
-		id, _ := s1.Choose("0001").Key("1010")
-		st, _ := s1.Choose("0001").ID(11)
-		if m["1010"] != 11 || *k[11] != "1010" || id != 11 || *st != "1010" {
-			t.Error()
-		}
-
-		if m["1015"] != 16 || *k[16] != "1015" {
-			t.Error()
-		}
-	}
-
-	{
-		// Test 8
-		cl := newConnect()
-		defer cl.Close()
-		erase(cl)
-
-		// defer erase(cl)
-
+	
 		var wg sync.WaitGroup
 		s1 := New(cl, testPrefix, "0001")
-
+	
 		f := func(s *Inst, b, e int) {
-			defer wg.Done()
 			for i := b; i < e; i++ {
 				s.Choose("0001").Key(strconv.Itoa(i))
 			}
+			wg.Done()
 		}
-
-		wg.Add(9)
+	
+		wg.Add(7)
 		go f(s1, 1000, 2500)
 		go f(s1, 1000, 2500)
 		go f(s1, 3000, 4500)
 		go f(s1, 2000, 3500)
-		go f(s1, 2000, 5500)
-		go f(s1, 2000, 5500)
+		go f(s1, 4000, 5500)
 		go f(s1, 0, 1000)
-		go f(s1, 5000, 10000)
 		go f(s1, 3000, 4500)
-
+	
 		wg.Wait()
-		// localWrite
-		m := s1.Choose("0001").Load().(maps).strToID
-		k := s1.Choose("0001").Load().(maps).idToStr
-
-		if len(m) != 10000 || len(k) != 10001 {
-			log.Println(len(m), len(k))
+	
+		// total number of keys in etcd
+		if count(cl, uint32ToString(s1.Choose("0001").nameSpaceID)+uint32ToString(typeKEY)) != 5500 {
 			t.Error()
 		}
-
-		for i, v := range m {
-			if *k[v] != i {
-				t.Error()
-			}
-		}
-
-		for i, v := range k[1:] {
-			if v == nil {
-				t.Error()
-			}
-
-			if m[*v] != uint32(i+1) {
-				t.Error()
-			}
+	
+		if err := checkMaps(s1.Choose("0001"), 5500); err != nil {
+			t.Error(err)
 		}
 	}
 }

@@ -33,7 +33,7 @@ func New(etcdClient *clientv3.Client, prefix string, nameSpace ...string) *Inst 
 	s := &Inst{make(map[string]*NameSpaceMaps, len(nameSpace))}
 
 	NScounter := join(prefix, uint32ToString(typeNextID))
-	clientCtx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
+	clientCtx, cancel := context.WithTimeout(context.Background(), 10000000*time.Millisecond)
 	etcdClient.Txn(clientCtx).
 		If(clientv3.Compare(clientv3.CreateRevision(NScounter), "=", 0)).
 		Then(clientv3.OpPut(NScounter, uint32ToString(1))).Commit()
@@ -69,8 +69,8 @@ type NameSpaceMaps struct {
 	stopKeyChan chan struct{}
 	counter     localCounter
 
-	atomic.Value
-	sync.Mutex
+	maps atomic.Value
+	m sync.Mutex
 }
 
 type maps struct {
@@ -145,7 +145,7 @@ func (s *NameSpaceMaps) checkNameSpaceID() {
 
 // Key string -> uint32
 func (s *NameSpaceMaps) Key(key string) (uint32, error) {
-	m := s.Load().(maps)
+	m := s.maps.Load().(maps)
 	if m.strToID[key] == 0 {
 		return s.addKey(&key)
 	}
@@ -154,7 +154,7 @@ func (s *NameSpaceMaps) Key(key string) (uint32, error) {
 
 // ID uint32 -> string
 func (s *NameSpaceMaps) ID(id uint32) (*string, error) {
-	m := s.Load().(maps)
+	m := s.maps.Load().(maps)
 	if id >= uint32(len(m.idToStr)) {
 		IDcounter := join(s.prefix, uint32ToString(s.nameSpaceID), uint32ToString(typeNextID))
 		clientCtx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
@@ -167,7 +167,7 @@ func (s *NameSpaceMaps) ID(id uint32) (*string, error) {
 			return nil, errors.New("out of range")
 		}
 		time.Sleep(20 * time.Millisecond)
-		m := s.Load().(maps)
+		m := s.maps.Load().(maps)
 		if id >= uint32(len(m.idToStr)) {
 			return nil, errors.New("timed out")
 		}
@@ -228,9 +228,9 @@ func (s *NameSpaceMaps) addKey(key *string) (uint32, error) {
 }
 
 func (s *NameSpaceMaps) localWrite(str *string, id uint32) {
-	s.Lock()
+	s.m.Lock()
 
-	m1 := s.Load().(maps)
+	m1 := s.maps.Load().(maps)
 
 	l := uint32(len(m1.idToStr))
 	if l <= id {
@@ -247,9 +247,9 @@ func (s *NameSpaceMaps) localWrite(str *string, id uint32) {
 	copy(m2.idToStr[:len(m1.idToStr)], m1.idToStr)
 	m2.idToStr[id] = str
 
-	s.Store(m2)
+	s.maps.Store(m2)
 
-	s.Unlock()
+	s.m.Unlock()
 }
 
 // GetNameSpaceValues /
@@ -285,7 +285,7 @@ func (s *NameSpaceMaps) getNameSpaceValues() {
 		rev: r.GetKvs()[0].ModRevision,
 	}
 
-	s.Store(mp)
+	s.maps.Store(mp)
 
 	go func() {
 		for {
@@ -294,7 +294,7 @@ func (s *NameSpaceMaps) getNameSpaceValues() {
 				for _, ev := range wresp.Events {
 					if ev.Type == mvccpb.PUT {
 						id := byteToUInt32(ev.Kv.Value)
-						sl := s.Load().(maps)
+						sl := s.maps.Load().(maps)
 						if !(uint32(len(sl.idToStr)) > id && sl.idToStr[id] != nil) {
 							str := string(ev.Kv.Key[len(Key):])
 							s.localWrite(&str, id)
