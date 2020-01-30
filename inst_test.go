@@ -66,8 +66,6 @@ func checkMaps(ns *NameSpaceMaps, l int) error {
 
 	// check that key -> id correct
 	for key, id := range m {
-		log.Println(key, id)
-
 		checkID, err1 := ns.Key(key)
 		if err1 != nil {
 			return err1
@@ -106,6 +104,7 @@ func checkMaps(ns *NameSpaceMaps, l int) error {
 }
 
 func TestNew(t *testing.T) {
+	log.Println("TestNew started")
 	cl := newConnect()
 	defer cl.Close()
 	erase(cl)
@@ -131,19 +130,17 @@ func TestNew(t *testing.T) {
 	if count(cl, "") != 9 { // NS counter, 4 NameSpaces and 4 keys counter
 		t.Error()
 	}
-
+	log.Println("TestNew finished")
 }
 
 // thread-safety check for creating new namespaces
-func TestSTnew(t *testing.T) {
+func TestTSnew(t *testing.T) {
+	log.Println("TestTSnew started")
 	cl := newConnect()
 	defer cl.Close()
 	erase(cl)
 
 	//defer erase(cl)
-
-	log.Println("test 2 before")
-
 	var wg sync.WaitGroup
 	f := func(b, e int) {
 		defer wg.Done()
@@ -158,26 +155,22 @@ func TestSTnew(t *testing.T) {
 	go f(10, 50)
 
 	wg.Wait()
-	log.Println("test 2 after")
 
 	if c := count(cl, ""); c != 101 { // 1 NS counter, 100 NameSpace and 100 keys counter
 		log.Println(c)
 		t.Error()
 	}
+	log.Println("TestTSnew finished")
 }
 
 // cheking corectly key & id work
-func Test3(t *testing.T) {
+func TestKeyID(t *testing.T) {
+	log.Println("TestKeyID started")
 	cl := newConnect()
 	defer cl.Close()
 	defer erase(cl)
 
-	// defer erase(cl)
-	log.Println("test 3 before")
-
 	s := New(cl, testPrefix, "0001")
-	log.Println("test 3 after New")
-
 	ns := s.Choose("0001")
 
 	ns.Key("1") // write new keys
@@ -209,11 +202,12 @@ func Test3(t *testing.T) {
 		t.Error(err)
 	}
 
-	log.Println("test 3 after")
+	log.Println("TestKeyID finished")
 }
 
 // checking that init correctly
 func TestInit(t *testing.T) {
+	log.Println("TestInit started")
 	cl := newConnect()
 	defer cl.Close()
 	defer erase(cl)
@@ -222,12 +216,10 @@ func TestInit(t *testing.T) {
 
 	f := func(s *Inst, b, e int) {
 		for i := b; i < e; i++ {
-			log.Println(i)
 			s.Choose("0001").Key(strconv.Itoa(i))
 		}
 	}
 
-	log.Println("first write")
 	f(s1, 1000, 1010)
 	// checking localWrite
 	if err := checkMaps(s1.Choose("0001"), 10); err != nil {
@@ -239,10 +231,12 @@ func TestInit(t *testing.T) {
 	if err := checkMaps(s2.Choose("0001"), 10); err != nil {
 		t.Error(err)
 	}
+	log.Println("TestInit finished")
 }
 
 // checking that watcher work correctly
 func TestWatcher(t *testing.T) {
+	log.Println("TestWatcher started")
 	cl := newConnect()
 	defer cl.Close()
 	defer erase(cl)
@@ -256,7 +250,7 @@ func TestWatcher(t *testing.T) {
 	}
 
 	// s1 should get new recoreds from s2
-	log.Println("watcher")
+	
 	s2 := New(cl, testPrefix, "0001")
 	f(s2, 1010, 1020) // s2 write new records at same namespace as s1
 
@@ -265,17 +259,18 @@ func TestWatcher(t *testing.T) {
 	if err := checkMaps(s1.Choose("0001"), 10); err != nil {
 		t.Error(err)
 	}
-
+	log.Println("TestWatcher finished")
 }
 
 // checking thread-safety watcher work
 func TestTSwatcher(t *testing.T) {
+	log.Println("TestTSwatcher started")
 	cl := newConnect()
 	defer cl.Close()
 	defer erase(cl)
 
 	// defer erase(cl)
-	log.Println("test 6 start")
+	log.Println("TestTSwatcher started")
 
 	var wg sync.WaitGroup
 	s1 := New(cl, testPrefix, "0001")
@@ -295,8 +290,6 @@ func TestTSwatcher(t *testing.T) {
 
 	wg.Wait()
 	time.Sleep(1000 * time.Millisecond) //wait wathers
-
-	log.Println("test 6 end")
 
 	if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter, 1 NameSpace and NS counter
 		log.Println(c)
@@ -318,10 +311,12 @@ func TestTSwatcher(t *testing.T) {
 	if err := checkMaps(s2.Choose("0001"), 1500); err != nil {
 		t.Error(err)
 	}
+	log.Println("TestTSwatcher finished")
 }
 
 // stress test thread-safety key records
 func TestTSkey(t *testing.T) {
+	log.Println("TestTSkey started")
 	cl := newConnect()
 	defer cl.Close()
 	defer erase(cl)
@@ -355,10 +350,12 @@ func TestTSkey(t *testing.T) {
 	if err := checkMaps(s1.Choose("0001"), 5500); err != nil {
 		t.Error(err)
 	}
+	log.Println("TestTSkey finished")
 }
 
 func TestAll(t *testing.T) {
 	{
+		log.Println("TestNew started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
@@ -384,19 +381,17 @@ func TestAll(t *testing.T) {
 		if count(cl, "") != 9 { // NS counter, 4 NameSpaces and 4 keys counter
 			t.Error()
 		}
-	
+		log.Println("TestNew finished")
 	}
 	
 	// thread-safety check for creating new namespaces
 	{
+		log.Println("TestTSnew started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
 	
 		//defer erase(cl)
-	
-		log.Println("test 2 before")
-	
 		var wg sync.WaitGroup
 		f := func(b, e int) {
 			defer wg.Done()
@@ -411,26 +406,22 @@ func TestAll(t *testing.T) {
 		go f(10, 50)
 	
 		wg.Wait()
-		log.Println("test 2 after")
 	
 		if c := count(cl, ""); c != 101 { // 1 NS counter, 100 NameSpace and 100 keys counter
 			log.Println(c)
 			t.Error()
 		}
+		log.Println("TestTSnew finished")
 	}
 	
 	// cheking corectly key & id work
 	{
+		log.Println("TestKeyID started")
 		cl := newConnect()
 		defer cl.Close()
-		erase(cl)
-	
-		// defer erase(cl)
-		log.Println("test 3 before")
+		defer erase(cl)
 	
 		s := New(cl, testPrefix, "0001")
-		log.Println("test 3 after New")
-	
 		ns := s.Choose("0001")
 	
 		ns.Key("1") // write new keys
@@ -462,11 +453,12 @@ func TestAll(t *testing.T) {
 			t.Error(err)
 		}
 	
-		log.Println("test 3 after")
+		log.Println("TestKeyID finished")
 	}
 	
 	// checking that init correctly
 	{
+		log.Println("TestInit started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
@@ -475,12 +467,10 @@ func TestAll(t *testing.T) {
 	
 		f := func(s *Inst, b, e int) {
 			for i := b; i < e; i++ {
-				log.Println(i)
 				s.Choose("0001").Key(strconv.Itoa(i))
 			}
 		}
 	
-		log.Println("first write")
 		f(s1, 1000, 1010)
 		// checking localWrite
 		if err := checkMaps(s1.Choose("0001"), 10); err != nil {
@@ -492,10 +482,12 @@ func TestAll(t *testing.T) {
 		if err := checkMaps(s2.Choose("0001"), 10); err != nil {
 			t.Error(err)
 		}
+		log.Println("TestInit finished")
 	}
 	
 	// checking that watcher work correctly
 	{
+		log.Println("TestWatcher started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
@@ -509,7 +501,7 @@ func TestAll(t *testing.T) {
 		}
 	
 		// s1 should get new recoreds from s2
-		log.Println("watcher")
+		
 		s2 := New(cl, testPrefix, "0001")
 		f(s2, 1010, 1020) // s2 write new records at same namespace as s1
 	
@@ -518,17 +510,15 @@ func TestAll(t *testing.T) {
 		if err := checkMaps(s1.Choose("0001"), 10); err != nil {
 			t.Error(err)
 		}
-	
+		log.Println("TestWatcher finished")
 	}
 	
 	// checking thread-safety watcher work
 	{
+		log.Println("TestTSwatcher started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
-	
-		// defer erase(cl)
-		log.Println("test 6 start")
 	
 		var wg sync.WaitGroup
 		s1 := New(cl, testPrefix, "0001")
@@ -548,8 +538,6 @@ func TestAll(t *testing.T) {
 	
 		wg.Wait()
 		time.Sleep(1000 * time.Millisecond) //wait wathers
-	
-		log.Println("test 6 end")
 	
 		if c := count(cl, ""); c != 1503 { // 1500 keys and 1 ID counter, 1 NameSpace and NS counter
 			log.Println(c)
@@ -571,10 +559,12 @@ func TestAll(t *testing.T) {
 		if err := checkMaps(s2.Choose("0001"), 1500); err != nil {
 			t.Error(err)
 		}
+		log.Println("TestTSwatcher finished")
 	}
 	
 	// stress test thread-safety key records
 	{
+		log.Println("TestTSkey started")
 		cl := newConnect()
 		defer cl.Close()
 		erase(cl)
@@ -608,5 +598,6 @@ func TestAll(t *testing.T) {
 		if err := checkMaps(s1.Choose("0001"), 5500); err != nil {
 			t.Error(err)
 		}
+		log.Println("TestTSkey finished")
 	}
 }
