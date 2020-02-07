@@ -1,4 +1,4 @@
-package inst
+package shareddict
 
 import (
 	"bytes"
@@ -16,43 +16,41 @@ import (
 )
 
 const (
-	typeKEY    uint32 = 0
-	typeID     uint32 = 1
-	typeNextID uint32 = 2
+	typeKEY uint32 = iota
+	typeID
+	typeNextID
 )
 
-var ccc int32
-
-// Inst /
-type Inst struct {
+// Dict //
+type Dict struct {
 	nameSpaces map[string]*NameSpaceMaps
 }
 
-// New NameSpaceMaps with ... string
-func New(etcdClient *clientv3.Client, prefix string, nameSpace ...string) *Inst {
-	s := &Inst{make(map[string]*NameSpaceMaps, len(nameSpace))}
+// New return Dict struct with ... string params
+func New(etcdClient *clientv3.Client, prefix string, nameSpace ...string) *Dict {
+	s := &Dict{make(map[string]*NameSpaceMaps, len(nameSpace))}
 
 	NScounter := join(prefix, uint32ToString(typeNextID))
-	clientCtx, cancel := context.WithTimeout(context.Background(), 10000000*time.Millisecond)
+	clientCtx, cancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
 	etcdClient.Txn(clientCtx).
 		If(clientv3.Compare(clientv3.CreateRevision(NScounter), "=", 0)).
 		Then(clientv3.OpPut(NScounter, uint32ToString(1))).Commit()
 	cancel()
 
 	for i := range nameSpace {
-		s.nameSpaces[nameSpace[i]] = newInst(etcdClient, prefix, nameSpace[i])
+		s.nameSpaces[nameSpace[i]] = initNS(etcdClient, prefix, nameSpace[i])
 	}
 
 	return s
 }
 
-// Choose /
-func (s *Inst) Choose(nameSpace string) *NameSpaceMaps {
+// ChooseNS - select the needed nameSpace
+func (s *Dict) ChooseNS(nameSpace string) *NameSpaceMaps {
 	return s.nameSpaces[nameSpace]
 }
 
 // Shutdown close all
-func (s *Inst) Shutdown() {
+func (s *Dict) Shutdown() {
 	for _, v := range s.nameSpaces {
 		v.Close()
 	}
@@ -70,7 +68,7 @@ type NameSpaceMaps struct {
 	counter     localCounter
 
 	maps atomic.Value
-	m sync.Mutex
+	m    sync.Mutex
 }
 
 type maps struct {
@@ -84,8 +82,8 @@ type localCounter struct {
 	sync.Mutex
 }
 
-// New version 2
-func newInst(etcdClient *clientv3.Client, prefix, nameSpace string) *NameSpaceMaps {
+// initNS - initialization and synchronization nameSpace
+func initNS(etcdClient *clientv3.Client, prefix, nameSpace string) *NameSpaceMaps {
 	this := NameSpaceMaps{
 		etcdClient:  etcdClient,
 		prefix:      prefix,
@@ -200,6 +198,7 @@ func (s *NameSpaceMaps) addKey(key *string) (uint32, error) {
 			return 0, err
 		}
 
+		// correctly recorded
 		if txnResp.Succeeded {
 			s.localWrite(key, ident)
 			s.counter.Lock()
@@ -211,7 +210,7 @@ func (s *NameSpaceMaps) addKey(key *string) (uint32, error) {
 
 			return ident + 1, nil
 
-			// key found
+			// key was found
 		} else if r := txnResp.Responses[1].GetResponseRange(); r.Count == 1 {
 			ident = byteToUInt32(r.GetKvs()[0].Value)
 			return ident, nil

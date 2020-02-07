@@ -1,4 +1,4 @@
-module instPackage
+module shared-dict
 
 go 1.12
 
