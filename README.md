@@ -1,4 +1,5 @@
 # shared-dict
+[![Build Status](https://travis-ci.com/d-enk/shared-dict.svg?branch=master)](https://travis-ci.com/d-enk/shared-dict)
 with this package you can create dictionary where for each nameSpace own ids for keys 
 (string -> uint32 / uint32 -> string)
 
